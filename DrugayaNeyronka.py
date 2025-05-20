@@ -1045,7 +1045,7 @@ class Simulation:
         return horizontal + vertical + systems
 
     def consume_energy(self, distance: float = 0, height_change: float = 0, time_elapsed: float = 1):
-        """Реалистичный расход энергии с учетом фиксированной скорости."""
+        """Расчет потребления энергии с учетом Джоулей."""
         energy_joules = 0
 
         # Расход на горизонтальное перемещение
@@ -1058,22 +1058,19 @@ class Simulation:
         elif height_change < 0:  # Спуск
             energy_joules += abs(height_change) * self.DESCENT_ENERGY
 
-        # Системный расход энергии
+        # Системное энергопотребление
         energy_joules += self.SYSTEMS_ENERGY * time_elapsed
 
-        # Конвертируем в Вт·ч и вычитаем из оставшегося заряда
-        energy_watt_hours = energy_joules / 3600
-        self.remaining_capacity_watt_hours = max(0.0, self.remaining_capacity_watt_hours - energy_watt_hours)
+        # Обновляем оставшийся заряд
+        self.remaining_capacity_watt_hours -= energy_joules / 3600  # Переводим Дж в Вт·ч
+        self.remaining_capacity_watt_hours = max(0, self.remaining_capacity_watt_hours)
         self.charge = self.remaining_capacity_watt_hours / self.BATTERY_CAPACITY_WATT_HOURS
 
         # Логируем расход энергии
         self.update_log(
-            f"Расход энергии: {energy_watt_hours:.2f} Вт·ч. Остаток заряда: {self.charge * 100:.2f}% "
-            f"({self.remaining_capacity_watt_hours:.2f} Вт·ч)"
+            f"Расход энергии: {energy_joules:.2f} Дж. Остаток заряда: {self.charge * 100:.2f}% "
+            f"({self.remaining_capacity_watt_hours * 3600:.2f} Дж)"
         )
-
-        # Обновляем интерфейс
-        self.update_ui()
 
     def move_drone_vertically(self, *args) -> List[plt.Artist]:
         """Подъем/спуск дрона с отображением изменения высоты."""
@@ -1111,21 +1108,24 @@ class Simulation:
         return [self.drone_icon]
 
     def perform_landing(self, frame: int) -> List[plt.Artist]:
-        """Обновление состояния дрона при посадке."""
-        # Проверяем, что целевая позиция установлена
-        if self.target_pos is None:
-            self.update_log("Ошибка: Целевая позиция не установлена!")
+        """Обработка посадки дрона."""
+        if not self.is_landing:
             return [self.drone_icon]
 
-        # Проверка, что дрон достиг станции
-        if self.target_pos.tolist() in self.stations:
-            self.update_log("Дрон успешно завершил посадку.")
-            self.consume_energy(height_change=self.drone_height - self.target_height)  # Расход заряда на посадку
-            self.charge_at_station()  # Запуск зарядки
+        # Проверяем высоту
+        height_diff = self.drone_height - self.target_height
+        if abs(height_diff) <= self.vertical_speed:
+            self.drone_height = self.target_height
+            self.is_landing = False
+            self.update_log(f"Посадка завершена на высоте: {self.target_height:.2f} м.")
             return [self.drone_icon]
 
-        # Выполняем движение вниз до целевой высоты
-        return self.move_drone_vertically()
+        # Обновляем высоту
+        step = min(self.vertical_speed, abs(height_diff))
+        self.drone_height -= step if height_diff > 0 else -step
+        self.consume_energy(height_change=step)
+        self.update_log(f"Текущая высота: {self.drone_height:.2f} м. Целевая: {self.target_height:.2f} м.")
+        return [self.drone_icon]
 
     def handle_arrival(self) -> None:
         """Обработка событий при достижении цели."""
@@ -1489,47 +1489,28 @@ class Simulation:
             return False
 
     def charge_at_station(self):
-        """Реалистичная подзарядка дрона на док-станции."""
+        """Процесс зарядки с корректным завершением."""
         self.update_log(
-            f"Зарядка началась. Текущий заряд: {self.charge * 100:.2f}% ({self.remaining_capacity_watt_hours:.2f} Вт·ч).")
+            f"Зарядка началась. Текущий заряд: {self.charge * 100:.2f}% ({self.remaining_capacity_watt_hours * 3600:.2f} Дж).")
         self.is_charging = True
 
-        # Расчет недостающей энергии
-        total_energy_needed = self.BATTERY_CAPACITY_WATT_HOURS * (1 - self.charge)
-        power = self.CHARGING_VOLTAGE * self.CHARGING_CURRENT
-        charging_time_hours = total_energy_needed / (power * self.CHARGING_EFFICIENCY)
-        charging_time_seconds = charging_time_hours * 3600
+        # Вычисляем энергию для полной зарядки
+        energy_needed_joules = self.BATTERY_CAPACITY - (self.remaining_capacity_watt_hours * 3600)
+        charging_rate_joules_per_second = self.CHARGING_VOLTAGE * self.CHARGING_CURRENT * self.CHARGING_EFFICIENCY
 
-        if charging_time_seconds <= 0:
-            self.update_log("Зарядка завершена мгновенно, так как батарея почти полностью заряжена.")
-            self.complete_charge()
-            return
-
-        start_time = time.time()
-
-        def update_charge():
-            elapsed_time_real = time.time() - start_time
-            elapsed_time_sim = elapsed_time_real * self.simulation_speed_multiplier
-
-            charge_increment = (power * self.CHARGING_EFFICIENCY * elapsed_time_sim) / (
-                        3600 * self.BATTERY_CAPACITY_WATT_HOURS)
-            self.charge = min(1.0, self.charge + charge_increment)
-            self.remaining_capacity_watt_hours = self.BATTERY_CAPACITY_WATT_HOURS * self.charge
-
-            remaining_time = max(0, charging_time_seconds - elapsed_time_sim)
-
+        while energy_needed_joules > 0:
+            time.sleep(1)  # Симулируем секунду зарядки
+            energy_provided = min(charging_rate_joules_per_second, energy_needed_joules)
+            energy_needed_joules -= energy_provided
+            self.remaining_capacity_watt_hours += energy_provided / 3600
+            self.charge = self.remaining_capacity_watt_hours / self.BATTERY_CAPACITY_WATT_HOURS
             self.update_log(
-                f"Заряд батареи: {self.charge * 100:.2f}% ({self.remaining_capacity_watt_hours:.2f} Вт·ч), "
-                f"Оставшееся время зарядки: {remaining_time:.2f} секунд."
+                f"Заряд батареи: {self.charge * 100:.2f}% ({self.remaining_capacity_watt_hours * 3600:.2f} Дж), "
+                f"Оставшаяся энергия для зарядки: {energy_needed_joules:.2f} Дж."
             )
-            self.update_ui()
 
-            if self.charge >= 1.0 or remaining_time <= 0:
-                self.complete_charge()
-            else:
-                self.root.after(1000, update_charge)
-
-        update_charge()
+        self.is_charging = False
+        self.update_log("Зарядка завершена. Батарея полностью заряжена.")
 
     def charge_timer(self, remaining_time):
         if remaining_time <= 0 or self.charge >= 1.0:
