@@ -1076,7 +1076,7 @@ class Simulation:
         self.update_ui()
 
     def move_drone_vertically(self, *args) -> List[plt.Artist]:
-        """Движение дрона вверх или вниз с учётом множителя симуляции."""
+        """Движение дрона вверх или вниз с учётом множителя симуляции и увеличение заряда."""
         if not self.is_landing:
             return [self.drone_icon]
 
@@ -1092,26 +1092,38 @@ class Simulation:
         height_change = self.vertical_speed * sim_delta_time  # Изменение высоты за sim_delta_time (в метрах)
         height_difference = self.drone_height - self.target_height  # Текущая разница высот (в метрах)
 
+        # Рассчитать мощность зарядки
+        power = self.CHARGING_VOLTAGE * self.CHARGING_CURRENT  # Мощность зарядки (Вт)
+        charge_increment = (power * self.CHARGING_EFFICIENCY * sim_delta_time) / 3600  # Увеличение заряда (Вт·ч)
+
         if abs(height_difference) <= abs(height_change):  # Дрон достиг нужной высоты
             self.drone_height = self.target_height  # Устанавливаем точную высоту
+            self.charge = min(1.0, self.charge + charge_increment / self.BATTERY_CAPACITY_WATT_HOURS)
+            self.remaining_capacity_watt_hours = self.BATTERY_CAPACITY_WATT_HOURS * self.charge
             self.is_landing = False  # Завершаем посадку/подъем
-            self.update_log(f"Дрон достиг высоты: {self.target_height:.2f} м.")
+            self.update_log(f"Дрон достиг высоты: {self.target_height:.2f} м. Заряд: {self.charge * 100:.2f}%.")
         else:
             # Двигаем дрон вверх или вниз
             self.drone_height -= height_change if height_difference > 0 else -height_change
 
+            # Увеличиваем заряд батареи постепенно
+            self.charge = min(1.0, self.charge + charge_increment / self.BATTERY_CAPACITY_WATT_HOURS)
+            self.remaining_capacity_watt_hours = self.BATTERY_CAPACITY_WATT_HOURS * self.charge
+
             # Расход энергии на подъём/спуск
             self.consume_energy(height_change=height_change)
 
-            # Логирование каждые 10 метров
+            # Логирование каждые 10 метров и обновление интерфейса
             if abs(self.drone_height - self.last_logged_height) >= 10:
                 self.last_logged_height = self.drone_height
                 self.update_log(
-                    f"Высота: {self.drone_height:.2f}, Целевая высота: {self.target_height:.2f}"
+                    f"Высота: {self.drone_height:.2f}, Целевая высота: {self.target_height:.2f}, "
+                    f"Заряд: {self.charge * 100:.2f}%. ({self.remaining_capacity_watt_hours:.2f} Вт·ч)"
                 )
 
-        # Централизованное обновление визуальных параметров
+        # Централизованное обновление визуальных параметров и интерфейса
         self.update_drone_visuals()
+        self.update_ui()
 
         return [self.drone_icon]
 
