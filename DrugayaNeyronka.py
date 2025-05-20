@@ -113,31 +113,37 @@ class Simulation:
     # Подъем: vh = 2.5 м/с P = 220 Вт m = 0.9 кг g = 9.81 м/с^2 E_climb = (P / vh) + (m * g) E_climb = 88 + 8.83 ≈ 96.83 Дж/м
     # Спуск:vh = 2.5 м/с P = 100 Вт E_descent = P / vh E_descent = 100 / 2.5 = 40 Дж/м
     # Системный расход энергии включает в себя затраты на электронику и датчики
-    HORIZONTAL_ENERGY = 10  # Энергия на горизонтальный полет (Дж/м)
-    CLIMB_ENERGY = 96.83  # Энергия на подъем (Дж/м)
-    DESCENT_ENERGY = 40  # Энергия на спуск (Дж/м)
-    SYSTEMS_ENERGY_WATTS = 5  # Системное энергопотребление (Вт)
-    SYSTEMS_ENERGY = SYSTEMS_ENERGY_WATTS / 3600  # Системное энергопотребление (Дж/сек)
-    OCCUPATION_PENALTY = 0.2  # Штраф за занятую станцию
-
-    # Параметры батареи
-    BATTERY_CAPACITY_WATT_HOURS = 80  # Емкость батареи (Вт·ч)
-    BATTERY_CAPACITY = BATTERY_CAPACITY_WATT_HOURS * 3600  # Перевод в джоули (288000 Дж)
-    VOLTAGE_BATTERY = 15.4  # Напряжение батареи (В)
-    INTERNAL_RESISTANCE = VOLTAGE_BATTERY / 4  # Внутреннее сопротивление батареи (Ом)
-
-    # Параметры зарядки
-    CHARGING_CURRENT = 4  # Ток зарядки (А)
-    CHARGING_VOLTAGE = 17.4  # Напряжение во время зарядки (В)
-    CHARGING_EFFICIENCY = 0.9  # КПД зарядки
-
-    # Состояние зарядки
-    charge = 0.8  # Текущий заряд батареи (в долях от полной емкости)
-    is_charging = False  # Флаг состояния зарядки
-
-    def __init__(self, root):
+    def __init__(self, root,
+                 charging_voltage=17.4,
+                 charging_current=4,
+                 charging_efficiency=0.9,
+                 battery_capacity_watt_hours=80):
+        """Инициализация класса Simulation."""
         self.root = root
         self.root.title("Система управления БПЛА")
+
+        # Константы энергии (перенесены в атрибуты объекта)
+        self.HORIZONTAL_ENERGY = 10  # Энергия на горизонтальный полет (Дж/м)
+        self.CLIMB_ENERGY = 96.83  # Энергия на подъем (Дж/м)
+        self.DESCENT_ENERGY = 40  # Энергия на спуск (Дж/м)
+        self.SYSTEMS_ENERGY_WATTS = 5  # Системное энергопотребление (Вт)
+        self.SYSTEMS_ENERGY = self.SYSTEMS_ENERGY_WATTS / 3600  # Системное энергопотребление (Дж/сек)
+        self.OCCUPATION_PENALTY = 0.2  # Штраф за занятую станцию
+
+        # Параметры батареи
+        self.BATTERY_CAPACITY_WATT_HOURS = battery_capacity_watt_hours
+        self.BATTERY_CAPACITY = self.BATTERY_CAPACITY_WATT_HOURS * 3600  # Перевод в джоули
+        self.VOLTAGE_BATTERY = 15.4  # Напряжение батареи (В)
+        self.INTERNAL_RESISTANCE = self.VOLTAGE_BATTERY / 4  # Внутреннее сопротивление батареи (Ом)
+
+        # Параметры зарядки
+        self.CHARGING_CURRENT = charging_current  # Ток зарядки (А)
+        self.CHARGING_VOLTAGE = charging_voltage  # Напряжение во время зарядки (В)
+        self.CHARGING_EFFICIENCY = charging_efficiency  # КПД зарядки
+
+        # Состояние зарядки
+        self.charge = 0.8  # Текущий заряд батареи (в долях от полной емкости)
+        self.is_charging = False  # Флаг состояния зарядки
 
         # Параметры карты
         self.grid_width = 30  # Ширина карты в клетках
@@ -1132,19 +1138,15 @@ class Simulation:
         # Проверка завершения посадки
         if not self.is_landing and abs(self.drone_height - self.target_height) < 1e-2:
             self.update_log("Дрон успешно завершил посадку.")
-            # Если дрон сел на док-станцию, запускаем зарядку
             if self.target_pos.tolist() in self.stations:
-                self.is_landing = False  # Завершаем процесс посадки
+                self.is_landing = False
                 self.charge_at_station()
             else:
-                # Если дрон достиг конечной точки маршрута, завершаем симуляцию
                 self.complete_simulation()
-            return artists
+            return artists  # Завершаем выполнение
 
-        # Централизованное обновление визуальных элементов
         self.update_drone_visuals()
         self.update_ui()
-
         return artists
 
     def handle_arrival(self) -> None:
@@ -1291,14 +1293,17 @@ class Simulation:
             if self.animation.event_source:
                 self.animation.event_source.stop()
 
+        if not self.mission_active:
+            return  # Не запускаем анимацию, если миссия не активна
+
         self.start_timer()  # Реальный таймер симуляции
         self.last_update_time = time.time()  # Для расчёта real_delta_time
 
         # Запуск анимации
         self.animation = FuncAnimation(
             self.fig_map,
-            self.update_frame,  # Убедитесь, что метод update_frame существует
-            interval=self.frame_interval,  # Интервал кадров зависит от множителя скорости
+            self.update_frame,
+            interval=self.frame_interval,
             blit=False,
             repeat=False,
             cache_frame_data=False
@@ -1508,48 +1513,71 @@ class Simulation:
         self.is_charging = True
 
         # Расчет параметров зарядки
-        power = self.CHARGING_VOLTAGE * self.CHARGING_CURRENT  # Мощность зарядки (Вт)
-        total_energy_needed = self.BATTERY_CAPACITY_WATT_HOURS * (1 - self.charge)  # Необходимая энергия (Вт·ч)
-        charging_time_hours = total_energy_needed / (power * self.CHARGING_EFFICIENCY)  # Время зарядки (ч)
-        charging_time_seconds = charging_time_hours * 3600  # Время зарядки в секундах
+        power = self.CHARGING_VOLTAGE * self.CHARGING_CURRENT
+        total_energy_needed = self.BATTERY_CAPACITY_WATT_HOURS * (1 - self.charge)
 
-        self.update_log(f"Общее время зарядки: {charging_time_seconds:.2f} секунд.")
+        if power <= 0 or self.CHARGING_EFFICIENCY <= 0:
+            self.update_log("Ошибка: параметры зарядки некорректны.")
+            self.complete_simulation()
+            return
 
-        # Эмуляция процесса зарядки
-        start_time = time.time()
-        elapsed_time = 0
-        while elapsed_time < charging_time_seconds and self.charge < 1.0:
-            elapsed_time = time.time() - start_time
-            charge_increment = (elapsed_time / charging_time_seconds) * (1 - self.charge)
-            self.charge = min(1.0, self.charge + charge_increment)
+        charging_time_hours = total_energy_needed / (power * self.CHARGING_EFFICIENCY)
+        charging_time_seconds = int(charging_time_hours * 3600)  # Приводим к целому числу секунд
 
-            # Обновление оставшейся емкости в Вт·ч
-            self.remaining_capacity_watt_hours = self.BATTERY_CAPACITY_WATT_HOURS * self.charge
+        if charging_time_seconds <= 0:
+            self.update_log("Зарядка завершена мгновенно, так как батарея почти полностью заряжена.")
+            self.complete_charge()
+            return
 
-            # Логирование процесса зарядки каждые 5 секунд
-            if int(elapsed_time) % 5 == 0:
-                self.update_log(
-                    f"Заряд батареи: {self.charge * 100:.2f}% ({self.remaining_capacity_watt_hours:.2f} Вт·ч)"
-                )
+        self.update_log(f"Общее время зарядки: {charging_time_seconds} секунд.")
+        self.charge_increment = (1 - self.charge) / charging_time_seconds
 
-            # Задержка для обновления интерфейса
-            time.sleep(0.5)
+        def update_charge():
+            if self.charge >= 1.0:
+                self.complete_charge()
+            else:
+                self.charge = min(1.0, self.charge + self.charge_increment)
+                self.remaining_capacity_watt_hours = self.BATTERY_CAPACITY_WATT_HOURS * self.charge
+                self.charge_label.config(text=f"Заряд: {self.charge * 100:.2f}%")
+                self.root.after(1000, update_charge)  # Обновляем каждые 1 секунду
 
-        # Зарядка завершена
+        update_charge()
+
+    def charge_timer(self, remaining_time):
+        if remaining_time <= 0 or self.charge >= 1.0:
+            self.charge = 1.0
+            self.remaining_capacity_watt_hours = self.BATTERY_CAPACITY_WATT_HOURS
+            self.update_log("Зарядка завершена. Батарея дрона полностью заряжена.")
+            self.is_charging = False
+            self.resume_mission()
+            return
+
+        # Обновление заряда
+        self.charge = min(1.0, self.charge + self.charge_increment)
+        self.remaining_capacity_watt_hours = self.BATTERY_CAPACITY_WATT_HOURS * self.charge
+        self.charge_label.config(text=f"Заряд: {self.charge * 100:.2f}%")
+
+        # Обновление лога каждые 5 секунд
+        if int(remaining_time) % 5 == 0:
+            self.update_log(
+                f"Заряд батареи: {self.charge * 100:.2f}% ({self.remaining_capacity_watt_hours:.2f} Вт·ч)"
+            )
+
+        # Планируем следующий вызов
+        self.root.after(100, self.charge_timer, remaining_time - 0.1)
+
+    def complete_charge(self):
+        """Завершение процесса зарядки."""
         self.charge = 1.0
         self.remaining_capacity_watt_hours = self.BATTERY_CAPACITY_WATT_HOURS
-        self.charge_label.config(
-            text=f"Заряд: 100.00% ({self.BATTERY_CAPACITY_WATT_HOURS:.2f} Вт·ч)"
-        )
-        self.update_log("Зарядка завершена. Батарея дрона полностью заряжена.")
+        self.charge_label.config(text=f"Заряд: 100.00% ({self.BATTERY_CAPACITY_WATT_HOURS:.2f} Вт·ч)")
+        self.update_log("Зарядка завершена. Батарея полностью заряжена.")
         self.is_charging = False
 
-        # Поднять высоту до начальной перед продолжением миссии
-        self.target_height = 500  # Начальная высота
-        self.is_landing = True  # Устанавливаем флаг для подъема
+        # Поднять высоту после завершения зарядки
+        self.target_height = 500
+        self.is_landing = True
         self.update_log("Дрон поднимается на высоту 500 м для продолжения миссии.")
-
-        # После подъема продолжить миссию
         self.resume_mission()
 
     def resume_mission(self):
