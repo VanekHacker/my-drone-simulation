@@ -1496,8 +1496,8 @@ class Simulation:
             return False
 
     def charge_at_station(self):
-        """Реалистичная подзарядка дрона на док-станции и продолжение полета."""
-        self.update_log("Дрон начал зарядку на док-станции.")
+        """Реалистичная подзарядка дрона на док-станции с учетом времени зарядки."""
+        self.update_log("Дрон начал зарядку на док-станции. Метод charge_at_station активен.")
         self.is_charging = True
 
         # Расчет недостающей энергии
@@ -1506,37 +1506,43 @@ class Simulation:
         charging_time_hours = total_energy_needed / (power * self.CHARGING_EFFICIENCY)  # Время зарядки (ч)
         charging_time_seconds = charging_time_hours * 3600  # Время зарядки в секундах
 
-        self.update_log(f"Общее время зарядки: {charging_time_seconds:.2f} секунд.")
+        if charging_time_seconds <= 0:
+            self.update_log("Зарядка завершена мгновенно, так как батарея почти полностью заряжена.")
+            self.complete_charge()
+            return
 
-        # Эмуляция процесса зарядки
+        self.update_log(f"Общее время зарядки (без учета множителя): {charging_time_seconds:.2f} секунд.")
         start_time = time.time()
-        elapsed_time = 0
 
         def update_charge():
-            nonlocal elapsed_time
-            elapsed_time = time.time() - start_time
+            # Расчет прошедшего времени с учетом множителя симуляции
+            nonlocal start_time
+            elapsed_time_real = time.time() - start_time
+            elapsed_time_sim = elapsed_time_real * self.simulation_speed_multiplier
 
-            if elapsed_time >= charging_time_seconds or self.charge >= 1.0:
-                self.complete_charge()
-                return
-
-            # Увеличиваем заряд батареи
-            charge_increment = (power * self.CHARGING_EFFICIENCY * elapsed_time) / (
+            # Увеличение заряда батареи
+            charge_increment = (power * self.CHARGING_EFFICIENCY * elapsed_time_sim) / (
                         3600 * self.BATTERY_CAPACITY_WATT_HOURS)
             self.charge = min(1.0, self.charge + charge_increment)
             self.remaining_capacity_watt_hours = self.BATTERY_CAPACITY_WATT_HOURS * self.charge
 
-            # Логируем состояние зарядки
-            self.update_log(
-                f"Заряд батареи: {self.charge * 100:.2f}% ({self.remaining_capacity_watt_hours:.2f} Вт·ч), "
-                f"Оставшееся время зарядки: {charging_time_seconds - elapsed_time:.2f} секунд."
-            )
+            # Оставшееся время зарядки
+            remaining_time = max(0, charging_time_seconds - elapsed_time_sim)
 
-            # Обновляем интерфейс
+            # Логирование процесса зарядки
+            self.update_log(
+                f"[DEBUG] Заряд батареи: {self.charge * 100:.2f}% ({self.remaining_capacity_watt_hours:.2f} Вт·ч), "
+                f"Оставшееся время зарядки: {remaining_time:.2f} секунд. "
+                f"Множитель симуляции: {self.simulation_speed_multiplier:.2f}"
+            )
             self.update_ui()
 
-            # Планируем следующее обновление через 1 секунду
-            self.root.after(1000, update_charge)
+            # Проверка завершения зарядки
+            if self.charge >= 1.0 or remaining_time <= 0:
+                self.complete_charge()
+            else:
+                # Планируем следующее обновление через 1 секунду реального времени
+                self.root.after(1000, update_charge)
 
         update_charge()
 
@@ -1564,19 +1570,20 @@ class Simulation:
         self.root.after(100, self.charge_timer, remaining_time - 0.1)
 
     def complete_charge(self):
-        """Завершение зарядки дрона."""
+        """Завершение процесса зарядки."""
         self.charge = 1.0
         self.remaining_capacity_watt_hours = self.BATTERY_CAPACITY_WATT_HOURS
         self.charge_label.config(
             text=f"Заряд: 100.00% ({self.BATTERY_CAPACITY_WATT_HOURS:.2f} Вт·ч)"
         )
+        self.update_log("[DEBUG] Зарядка завершена. Метод complete_charge активен.")
         self.update_log("Зарядка завершена. Батарея дрона полностью заряжена.")
         self.is_charging = False
 
         # Возврат на рабочую высоту
         self.target_height = float(self.entries['drone_height'].get())  # Рабочая высота из параметров
         self.is_landing = True  # Устанавливаем флаг для подъема/спуска
-        self.update_log(f"Дрон возвращается на рабочую высоту: {self.target_height} м.")
+        self.update_log(f"Дрон возвращается на рабочую высоту: {self.target_height} м. Метод complete_charge завершен.")
 
         # Продолжение миссии после достижения рабочей высоты
         self.resume_mission()
