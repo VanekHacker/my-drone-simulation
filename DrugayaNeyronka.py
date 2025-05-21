@@ -1103,10 +1103,12 @@ class Simulation:
             # Расход энергии на подъем/спуск
             self.consume_energy(height_change=height_change)
 
-            # Логирование каждые 10 метров
+            # Логирование каждые 10 метров, обновляем целевую высоту
             if abs(self.drone_height - self.last_logged_height) >= 10:
                 self.last_logged_height = self.drone_height
-                self.update_log(f"Высота: {self.drone_height:.2f}, Целевая высота: {self.target_height:.2f}")
+                self.update_log(
+                    f"Размер дрона: {self.drone_size:.2f}, Высота: {self.drone_height:.2f}, Целевая высота: {self.target_height:.2f}"
+                )
 
         # Централизованное обновление визуальных параметров
         self.update_drone_visuals()
@@ -1506,7 +1508,17 @@ class Simulation:
 
     def charge_at_station(self):
         """Реалистичная подзарядка дрона на док-станции."""
-        if self.is_charging:  # Если зарядка уже идет, не начинаем заново
+        if self.is_charging or getattr(self, 'has_charged', False):  # Зарядка уже выполнена
+            return
+
+        # Проверяем, находится ли дрон на высоте док-станции
+        if self.drone_height not in self.station_heights:
+            self.update_log("Ошибка: Зарядка возможна только на высоте док-станции.")
+            return
+
+        # Проверяем текущий заряд батареи, если он полный, зарядка не требуется
+        if self.remaining_capacity_watt_hours >= self.BATTERY_CAPACITY_WATT_HOURS:
+            self.update_log("Батарея уже полностью заряжена. Зарядка не требуется.")
             return
 
         self.update_log(
@@ -1588,13 +1600,16 @@ class Simulation:
         self.update_log("Зарядка завершена. Батарея дрона полностью заряжена.")
         self.is_charging = False
 
+        # Устанавливаем флаг, чтобы предотвратить повторную зарядку
+        self.has_charged = True
+
         # Расход энергии на подъем на рабочую высоту
-        self.target_height = 500.0
+        self.target_height = float(self.entries['drone_height'].get())  # Используем значение из параметров
         self.is_landing = True
         self.update_log(f"Дрон возвращается на рабочую высоту: {self.target_height:.2f} м.")
 
         def update_height():
-            """Обновление высоты при подъеме."""
+            """Обновление высоты при подъеме/спуске."""
             if not self.is_landing:
                 return
 
@@ -1611,7 +1626,7 @@ class Simulation:
                 self.consume_energy(height_change=height_difference)
                 self.is_landing = False
                 self.update_log(f"Дрон достиг рабочей высоты: {self.target_height:.2f} м.")
-                self.resume_mission()
+                self.resume_mission()  # Продолжаем миссию
                 return
 
             self.drone_height += height_change if height_difference > 0 else -height_change
@@ -1624,8 +1639,8 @@ class Simulation:
         update_height()
 
     def resume_mission(self):
-        """Продолжение полета после завершения зарядки."""
-        self.update_log("Дрон продолжает миссию после зарядки аккумулятора")
+        """Продолжение миссии после зарядки."""
+        self.update_log("Дрон продолжает миссию после зарядки аккумулятора.")
         self.is_landing = False  # Завершаем состояние посадки
 
         # Убедиться, что конечная точка маршрута установлена
@@ -1638,7 +1653,7 @@ class Simulation:
                 self.update_log("Ошибка восстановления конечной точки маршрута!")
                 return
 
-        # Устанавливаем цель на конечную точку маршрута
+        # Устанавливаем текущую цель на конечную точку маршрута
         self.target_pos = self.end_pos.copy()
         self.mission_active = True
         self.start_animation()  # Запускаем анимацию полета до конечной точки
