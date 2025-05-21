@@ -1115,19 +1115,30 @@ class Simulation:
 
     def perform_landing(self, frame: int) -> List[plt.Artist]:
         """Обновление состояния дрона при посадке."""
+        # Проверяем, завершена ли посадка
+        if not self.is_landing:
+            return [self.drone_icon]
+
         # Движение дрона вверх или вниз
         artists = self.move_drone_vertically()
 
         # Проверка завершения посадки
         if not self.is_landing and abs(self.drone_height - self.target_height) < 1e-2:
-            self.update_log("Дрон успешно завершил посадку.")
+            # Логируем завершение посадки только один раз
+            if not hasattr(self, "landing_logged") or not self.landing_logged:
+                self.update_log("Дрон успешно завершил посадку.")
+                self.landing_logged = True  # Устанавливаем флаг, чтобы предотвратить повторный вывод
+
+            # Если дрон находится на станции, начинаем зарядку
             if self.target_pos.tolist() in self.stations:
                 self.is_landing = False
                 self.charge_at_station()
             else:
-                self.complete_simulation()
+                self.complete_simulation()  # Завершаем симуляцию, если это не станция
+
             return artists  # Завершаем выполнение
 
+        # Обновляем визуализацию и интерфейс
         self.update_drone_visuals()
         self.update_ui()
         return artists
@@ -1495,6 +1506,9 @@ class Simulation:
 
     def charge_at_station(self):
         """Реалистичная подзарядка дрона на док-станции."""
+        if self.is_charging:  # Если зарядка уже идет, не начинаем заново
+            return
+
         self.update_log(
             f"Зарядка началась. Текущий заряд: {self.charge * 100:.2f}% ({self.remaining_capacity_watt_hours:.2f} Вт·ч)."
         )
