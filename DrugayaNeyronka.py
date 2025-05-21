@@ -1124,14 +1124,17 @@ class Simulation:
                 self.update_log("Дрон успешно завершил посадку.")
                 self.landing_logged = True  # Устанавливаем флаг, чтобы предотвратить повторный вывод
 
-            # Если дрон находится на станции, начинаем зарядку
-            if self.target_pos.tolist() in self.stations:
-                self.is_landing = False
-                self.charge_at_station()
-            else:
-                self.complete_simulation()  # Завершаем симуляцию, если это не станция
+            # Если дрон находится на высоте одной из док-станций, начинаем зарядку
+            for idx, height in enumerate(self.station_heights):
+                if abs(self.drone_height - height) < 1e-2:  # Проверяем совпадение высоты с док-станцией
+                    self.update_log(f"Дрон находится на высоте станции {idx + 1}: {height} м. Инициируется зарядка.")
+                    self.charge_at_station(idx)
+                    return artists
 
-            return artists  # Завершаем выполнение
+            # Если не удалось идентифицировать станцию, завершаем симуляцию
+            self.update_log("Ошибка: дрон не совпадает по высоте ни с одной из станций.")
+            self.complete_simulation()
+            return artists
 
         # Обновляем визуализацию и интерфейс
         self.update_drone_visuals()
@@ -1500,14 +1503,14 @@ class Simulation:
             self.update_log(f"Ошибка в резервном режиме: {str(e)}")
             return False
 
-    def charge_at_station(self):
+    def charge_at_station(self, station_idx: int):
         """Реалистичная подзарядка дрона на док-станции."""
         if self.is_charging or getattr(self, 'has_charged', False):  # Зарядка уже выполнена
             return
 
-        # Проверяем, находится ли дрон на высоте док-станции
-        if self.drone_height not in self.station_heights:
-            self.update_log("Ошибка: Зарядка возможна только на высоте док-станции.")
+        # Проверяем, что дрон находится на правильной высоте
+        if abs(self.drone_height - self.station_heights[station_idx]) >= 1e-2:
+            self.update_log(f"Ошибка: Зарядка возможна только на высоте станции {station_idx + 1}.")
             return
 
         # Проверяем текущий заряд батареи, если он полный, зарядка не требуется
@@ -1516,21 +1519,26 @@ class Simulation:
             return
 
         self.update_log(
-            f"Зарядка началась. Текущий заряд: {self.charge * 100:.2f}% ({self.remaining_capacity_watt_hours:.2f} Вт·ч)."
+            f"Зарядка началась на станции {station_idx + 1}. Текущий заряд: {self.charge * 100:.2f}% ({self.remaining_capacity_watt_hours:.2f} Вт·ч)."
         )
         self.is_charging = True
 
-        # Расчет недостающей энергии
-        total_energy_needed = self.BATTERY_CAPACITY_WATT_HOURS - self.remaining_capacity_watt_hours
-        power = self.CHARGING_VOLTAGE * self.CHARGING_CURRENT
-        charging_time_hours = total_energy_needed / (power * self.CHARGING_EFFICIENCY)
-        charging_time_seconds = charging_time_hours * 3600
+        # Шаг 1: Определяем необходимую энергию для зарядки
+        energy_needed = self.BATTERY_CAPACITY_WATT_HOURS - self.remaining_capacity_watt_hours  # Вт·ч
+        charging_power = self.CHARGING_VOLTAGE * self.CHARGING_CURRENT  # Вт
+        charging_efficiency = self.CHARGING_EFFICIENCY
 
-        if total_energy_needed <= 0.01:  # Если почти полностью заряжен
+        # Шаг 2: Рассчитываем теоретическое время зарядки в секундах (с учетом КПД)
+        charging_time_seconds = (energy_needed / (charging_power * charging_efficiency)) * 3600
+
+        # Если энергия почти полностью заряжена
+        if energy_needed <= 0.01:
             self.update_log("Зарядка завершена мгновенно, так как батарея почти полностью заряжена.")
             self.complete_charge()
             return
 
+        # Шаг 3: Учитываем множитель скорости симуляции
+        charging_time_simulated = charging_time_seconds / self.simulation_speed_multiplier
         start_time = time.time()
 
         def update_charge():
@@ -1540,7 +1548,7 @@ class Simulation:
             elapsed_time_sim = elapsed_time_real * self.simulation_speed_multiplier
 
             # Увеличение заряда
-            charge_increment = (power * self.CHARGING_EFFICIENCY * elapsed_time_sim) / 3600  # Вт·ч
+            charge_increment = (charging_power * charging_efficiency * elapsed_time_sim) / 3600  # Вт·ч
             self.remaining_capacity_watt_hours = min(
                 self.BATTERY_CAPACITY_WATT_HOURS, self.remaining_capacity_watt_hours + charge_increment
             )
