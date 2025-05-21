@@ -781,19 +781,12 @@ class Simulation:
             target_height = 0
 
         # Расчет соотношения высоты (чем ниже высота, тем меньше размер)
-        height_difference = self.drone_height - target_height
         height_ratio = max(0, min(1, self.drone_height / 5000.0))  # Высота относительно максимальной (5000 м)
 
         # Интерполяция размера
         target_size = self.min_drone_size + (self.max_drone_size - self.min_drone_size) * height_ratio
 
-        # Проверяем, изменяется ли высота каждые 10 метров для логирования
-        if abs(self.drone_height - self.last_logged_height) >= 10:
-            self.update_log(
-                f"Размер дрона: {self.drone_size:.2f}, Высота: {self.drone_height:.2f}, Целевая высота: {target_height:.2f}")
-            self.last_logged_height = self.drone_height
-
-        # Устанавливаем размер маркера дрона (только при изменении высоты)
+        # Плавное изменение размера дрона
         if self.is_landing or self.drone_height != self.target_height:
             self.drone_size += (target_size - self.drone_size) * 0.2  # Плавный переход (20% за кадр)
 
@@ -1243,10 +1236,7 @@ class Simulation:
 
     def move_drone(self, *args) -> List[plt.Artist]:
         """Движение дрона с учётом множителя скорости."""
-        self.update_log("Попытка движения дрона.")
-
         if not self.mission_active or self.target_pos is None:
-            self.update_log("Дрон не может двигаться: mission_active=False или target_pos=None.")
             return [self.drone_icon, self.route_line]
 
         # Преобразуем позицию дрона в float для совместимости с вычислениями
@@ -1286,7 +1276,6 @@ class Simulation:
         self.update_drone_visuals()
 
         # Обновляем карту
-        self.update_log(f"Дрон движется к цели: текущая позиция={self.drone_pos}, цель={self.target_pos}")
         return [self.drone_icon, self.route_line]
 
     def start_animation(self):
@@ -1338,6 +1327,9 @@ class Simulation:
             self.start_pos = np.array([start_data[0][0], start_data[1][0]])
             self.target_pos = np.array([end_data[0][0], end_data[1][0]])
             self.drone_pos = self.start_pos.copy()
+
+            # Логирование текущей и конечной позиции
+            self.update_log(f"Начало миссии. Текущая позиция: {self.drone_pos}, цель: {self.target_pos}.")
 
             # Настройка состояния
             self.is_forced_landing = False
@@ -1663,12 +1655,21 @@ class Simulation:
         self.update_log(f"Текущая цель установлена: {self.target_pos}. Флаг mission_active=True.")
         self.mission_active = True
 
-        # Убедимся, что анимация запускается
-        if not hasattr(self, 'animation') or not self.animation:
-            self.update_log("Запуск анимации для продолжения миссии.")
-            self.start_animation()
-        else:
-            self.update_log("Анимация уже запущена. Проверка завершена.")
+        # Обновляем маршрут на карте
+        self.route_line.set_data(
+            [self.drone_pos[0], self.target_pos[0]],
+            [self.drone_pos[1], self.target_pos[1]]
+        )
+        self.update_log("Маршрут до конечной точки обновлен.")
+
+        # Принудительно перезапускаем анимацию
+        if hasattr(self, 'animation') and self.animation:
+            if self.animation.event_source:
+                self.animation.event_source.stop()
+                self.update_log("Существующая анимация остановлена.")
+
+        self.update_log("Запуск новой анимации для продолжения миссии.")
+        self.start_animation()
 
     def complete_simulation(self):
         """Завершение симуляции и остановка таймера."""
