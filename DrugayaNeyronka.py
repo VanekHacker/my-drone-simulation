@@ -1243,7 +1243,10 @@ class Simulation:
 
     def move_drone(self, *args) -> List[plt.Artist]:
         """Движение дрона с учётом множителя скорости."""
+        self.update_log("Попытка движения дрона.")
+
         if not self.mission_active or self.target_pos is None:
+            self.update_log("Дрон не может двигаться: mission_active=False или target_pos=None.")
             return [self.drone_icon, self.route_line]
 
         # Преобразуем позицию дрона в float для совместимости с вычислениями
@@ -1264,7 +1267,7 @@ class Simulation:
 
         if distance_step >= distance_to_target:  # Дрон достиг цели
             self.drone_pos = self.target_pos.copy()  # Устанавливаем позицию точно на цель
-            self.update_log("Дрон достиг цели.")
+            self.update_log(f"Дрон достиг цели: {self.target_pos}.")
             self.handle_arrival()
             self.mission_active = False
         else:
@@ -1283,17 +1286,16 @@ class Simulation:
         self.update_drone_visuals()
 
         # Обновляем карту
+        self.update_log(f"Дрон движется к цели: текущая позиция={self.drone_pos}, цель={self.target_pos}")
         return [self.drone_icon, self.route_line]
 
     def start_animation(self):
         """Запуск анимации с учётом множителя скорости."""
-        # Остановка предыдущей анимации, если она активна
+        self.update_log("Попытка запуска анимации.")
         if hasattr(self, 'animation') and self.animation:
             if self.animation.event_source:
                 self.animation.event_source.stop()
-
-        if not self.mission_active:
-            return  # Не запускаем анимацию, если миссия не активна
+                self.update_log("Существующая анимация остановлена.")
 
         self.start_timer()  # Реальный таймер симуляции
         self.last_update_time = time.time()  # Для расчёта real_delta_time
@@ -1308,7 +1310,7 @@ class Simulation:
             cache_frame_data=False
         )
 
-        self.update_log("Анимация запущена.")
+        self.update_log("Анимация успешно запущена.")
         self.canvas_map.draw()
 
     def start_mission(self, event=None) -> None:
@@ -1606,11 +1608,13 @@ class Simulation:
         # Расход энергии на подъем на рабочую высоту
         self.target_height = float(self.entries['drone_height'].get())  # Используем значение из параметров
         self.is_landing = True
-        self.update_log(f"Дрон возвращается на рабочую высоту: {self.target_height:.2f} м.")
+        self.update_log(
+            f"Дрон возвращается на рабочую высоту: {self.target_height:.2f} м. is_landing={self.is_landing}.")
 
         def update_height():
             """Обновление высоты при подъеме/спуске."""
             if not self.is_landing:
+                self.update_log("Подъем завершен. Состояние посадки отключено (is_landing=False).")
                 return
 
             current_time = time.time()
@@ -1625,7 +1629,8 @@ class Simulation:
                 self.drone_height = self.target_height
                 self.consume_energy(height_change=height_difference)
                 self.is_landing = False
-                self.update_log(f"Дрон достиг рабочей высоты: {self.target_height:.2f} м.")
+                self.update_log(f"Дрон достиг рабочей высоты: {self.target_height:.2f} м. "
+                                f"Флаг is_landing={self.is_landing}. Начинаем продолжение миссии.")
                 self.resume_mission()  # Продолжаем миссию
                 return
 
@@ -1640,10 +1645,10 @@ class Simulation:
 
     def resume_mission(self):
         """Продолжение миссии после зарядки."""
-        self.update_log("Дрон продолжает миссию после зарядки аккумулятора.")
+        self.update_log("Попытка продолжить миссию.")
         self.is_landing = False  # Завершаем состояние посадки
 
-        # Убедиться, что конечная точка маршрута установлена
+        # Проверяем конечную точку маршрута
         if self.end_pos is None:
             self.update_log("Ошибка: конечная точка маршрута не установлена! Попытка восстановления...")
             if self.target_pos is not None:  # Используем последнюю известную цель
@@ -1655,8 +1660,15 @@ class Simulation:
 
         # Устанавливаем текущую цель на конечную точку маршрута
         self.target_pos = self.end_pos.copy()
+        self.update_log(f"Текущая цель установлена: {self.target_pos}. Флаг mission_active=True.")
         self.mission_active = True
-        self.start_animation()  # Запускаем анимацию полета до конечной точки
+
+        # Убедимся, что анимация запускается
+        if not hasattr(self, 'animation') or not self.animation:
+            self.update_log("Запуск анимации для продолжения миссии.")
+            self.start_animation()
+        else:
+            self.update_log("Анимация уже запущена. Проверка завершена.")
 
     def complete_simulation(self):
         """Завершение симуляции и остановка таймера."""
