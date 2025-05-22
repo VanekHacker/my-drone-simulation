@@ -114,8 +114,8 @@ class Simulation:
     # Спуск:vh = 2.5 м/с P = 100 Вт E_descent = P / vh E_descent = 100 / 2.5 = 40 Дж/м
     # Системный расход энергии включает в себя затраты на электронику и датчики
     def __init__(self, root,
-                 charging_voltage=17.4,
-                 charging_current=4,
+                 charging_voltage=48,
+                 charging_current=10,
                  charging_efficiency=0.9,
                  battery_capacity_watt_hours=80):
         """Инициализация класса Simulation."""
@@ -999,7 +999,7 @@ class Simulation:
         except ValueError:
             self.update_log("Некорректный ввод заряда")
 
-    def reset_simulation(self, event=None) -> None:
+    def reset_simulation(self, event=None):
         """Полный сброс симуляции."""
         if hasattr(self, 'animation') and self.animation:
             if self.animation.event_source:
@@ -1012,33 +1012,30 @@ class Simulation:
         # Сброс состояния
         self.drone_pos = np.array([15, 10])
         self.drone_height = 500.0
+        self.target_height = 0.0  # Сброс высоты цели
         self.remaining_capacity_watt_hours = self.BATTERY_CAPACITY_WATT_HOURS  # Сброс заряда батареи
+        self.charge = self.remaining_capacity_watt_hours / self.BATTERY_CAPACITY_WATT_HOURS
+        self.is_charging = False
+        self.has_charged = False
+        self.is_landing = False
         self.mission_started = False
         self.mission_active = False
-        self.is_forced_landing = False
-        self.start_pos = None
-        self.target_pos = None
-        self.end_pos = None
+        self.start_pos = None  # Сброс начальной точки маршрута
+        self.target_pos = None  # Сброс целевой точки маршрута
+        self.end_pos = None  # Сброс конечной точки маршрута
 
-        # Полная очистка карты
-        self.ax.cla()
-        self.setup_map_grid()
-        self.add_stations()
+        # Очистка начальной и конечной точек на карте
+        self.start_icon.set_data([], [])  # Удаляем начальную точку из интерфейса
+        self.end_icon.set_data([], [])  # Удаляем конечную точку из интерфейса
+        self.route_line.set_data([], [])  # Удаляем маршрут
 
-        # Реинициализация визуальных элементов
-        self.route_line, = self.ax.plot([], [], 'b--', linewidth=1, alpha=1, zorder=4)
-        self.drone_icon = self.ax.scatter(
-            self.drone_pos[0], self.drone_pos[1],
-            s=15 ** 2, c='black', marker='x', linewidths=2, label='Дрон', zorder=5
+        # Обновление интерфейса
+        self.charge_label.config(
+            text=f"Заряд: {self.charge * 100:.2f}% ({self.remaining_capacity_watt_hours:.2f} Вт·ч)"
         )
-        self.start_icon, = self.ax.plot([], [], 'bo', markersize=10, label='Старт', zorder=4)
-        self.end_icon, = self.ax.plot([], [], 'ro', markersize=10, label='Финиш', zorder=4)
-
-        # Сброс интерфейса
-        self.charge_label.config(text="Заряд: 100.00%")
         self.height_label.config(text="Высота: 500 м")
         self.update_log("Симуляция сброшена.")
-        self.canvas_map.draw()
+        self.canvas_map.draw()  # Обновляем карту
 
     def generate_drone_params(self) -> np.ndarray:
         """Генерация параметров для нейросети."""
@@ -1540,18 +1537,13 @@ class Simulation:
     def charge_at_station(self, station_idx: int):
         """Реалистичная зарядка дрона на док-станции с учетом фаз CC и CV."""
         if self.is_charging or getattr(self, 'has_charged', False):  # Если зарядка уже идет или завершена
+            self.update_log("Зарядка уже активна или завершена. Повторная зарядка невозможна.")
             return
 
         # Проверка высоты
         if abs(self.drone_height - self.station_heights[station_idx]) >= 1e-2:
             self.update_log(f"Ошибка: Зарядка возможна только на высоте станции {station_idx + 1}.")
             return
-
-        # Проверка корректной инициализации начального заряда
-        if not hasattr(self, 'remaining_capacity_watt_hours') or not hasattr(self, 'charge'):
-            self.update_log("Ошибка инициализации переменных заряда. Устанавливаем значения по умолчанию.")
-            self.remaining_capacity_watt_hours = self.BATTERY_CAPACITY_WATT_HOURS * self.charge
-            self.charge = self.remaining_capacity_watt_hours / self.BATTERY_CAPACITY_WATT_HOURS
 
         # Проверка полного заряда
         if self.remaining_capacity_watt_hours >= self.BATTERY_CAPACITY_WATT_HOURS:
@@ -1563,17 +1555,11 @@ class Simulation:
         efficiency = self.CHARGING_EFFICIENCY  # КПД зарядки
         energy_needed = self.BATTERY_CAPACITY_WATT_HOURS - self.remaining_capacity_watt_hours  # Требуемая энергия (Вт·ч)
 
-        # Инициализация данных для графика зарядки
-        self.charge_log = {
-            "time": [0],
-            "charge_percent": [self.charge * 100],
-            "power": [0],
-            "remaining_energy": [energy_needed]
-        }
-
         self.update_log(f"Зарядка началась на станции {station_idx + 1}. Текущий заряд: {self.charge * 100:.2f}% "
                         f"({self.remaining_capacity_watt_hours:.2f} Вт·ч).")
+
         self.is_charging = True
+        self._last_elapsed_time = 0  # Инициализация времени симуляции
         start_time = time.time()
 
         def update_charge():
@@ -1582,48 +1568,59 @@ class Simulation:
             # Реальное время с начала зарядки
             elapsed_time_real = time.time() - start_time
             elapsed_time_sim = elapsed_time_real * self.simulation_speed_multiplier  # С учетом ускорения симуляции
-            time_step = elapsed_time_sim - getattr(self, '_last_elapsed_time', 0)  # Временной шаг
+
+            # Расчет временного шага
+            time_step = elapsed_time_sim - self._last_elapsed_time
             self._last_elapsed_time = elapsed_time_sim
 
             # Вычисление мощности
             if self.charge < 0.9:  # Фаза CC (постоянный ток)
                 power = max_power
             else:  # Фаза CV (постоянное напряжение)
-                # Экспоненциальное снижение мощности
-                power = max_power * np.exp(-(self.charge - 0.9) / 0.1)
+                power = max_power * (1 - (self.charge - 0.9) / 0.1)  # Уменьшение мощности
+
+            # Защита от деления на ноль
+            if power <= 0:
+                self.update_log("Ошибка: мощность зарядки стала равна нулю. Завершаем зарядку.")
+                self.complete_charge()
+                return
 
             # Прирост заряда
             charge_increment = (power * efficiency * time_step) / 3600  # Вт·ч
-            self.remaining_capacity_watt_hours = min(
-                self.BATTERY_CAPACITY_WATT_HOURS, self.remaining_capacity_watt_hours + charge_increment
-            )
+            charge_increment = min(charge_increment,
+                                   self.BATTERY_CAPACITY_WATT_HOURS - self.remaining_capacity_watt_hours)
+
+            # Обновление состояния заряда
+            self.remaining_capacity_watt_hours += charge_increment
             self.charge = self.remaining_capacity_watt_hours / self.BATTERY_CAPACITY_WATT_HOURS
+
+            # Обновление интерфейса
+            self.charge_label.config(
+                text=f"Заряд: {self.charge * 100:.2f}% ({self.remaining_capacity_watt_hours:.2f} Вт·ч)"
+            )
 
             # Обновление оставшегося времени
             energy_needed = self.BATTERY_CAPACITY_WATT_HOURS - self.remaining_capacity_watt_hours
-            remaining_time = (energy_needed / (power * efficiency)) * 3600 if power > 0 else 0
+            remaining_time = (energy_needed / (power * efficiency)) * 3600 if power > 0 else float('inf')
+
+            # Ограничение времени зарядки
+            remaining_time = min(remaining_time, 3600 * 10)  # Не больше 10 часов
 
             # Логирование прогресса
             self.update_log(
                 f"Заряд батареи: {self.charge * 100:.2f}% ({self.remaining_capacity_watt_hours:.2f} Вт·ч). "
-                f"Текущая мощность зарядки: {power:.2f} Вт. Оставшееся время: {remaining_time:.2f} сек."
+                f"Текущая мощность: {power:.2f} Вт. Оставшееся время: {remaining_time:.2f} сек."
             )
-
-            # Сохранение данных для графика
-            self.charge_log["time"].append(elapsed_time_real)
-            self.charge_log["charge_percent"].append(self.charge * 100)
-            self.charge_log["power"].append(power)
-            self.charge_log["remaining_energy"].append(energy_needed)
 
             # Проверка завершения зарядки
             if self.charge >= 0.9999 or remaining_time <= 0:
                 total_time = time.time() - start_time
                 self.update_log(f"Зарядка завершена. Батарея полностью заряжена. Общее время: {total_time:.2f} сек.")
                 self.complete_charge()
-                # Построение графика зарядки
-                self.plot_charge_graph()
             else:
-                self.root.after(1000, update_charge)  # Следующий шаг через 1 секунду
+                # Планируем следующий вызов с учетом ускорения симуляции
+                interval = int(1000 / self.simulation_speed_multiplier)
+                self.root.after(interval, update_charge)
 
         update_charge()
 
@@ -1670,6 +1667,7 @@ class Simulation:
             """Обновление высоты при подъеме/спуске."""
             if not self.is_landing:
                 self.update_log("Подъем завершен. Состояние посадки отключено (is_landing=False).")
+                self.resume_mission()  # Продолжение миссии после подъема
                 return
 
             current_time = time.time()
