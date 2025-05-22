@@ -350,27 +350,61 @@ class Simulation:
         style.configure("Apply.TButton", font=button_font, padding=10)
 
     def init_plot_tab(self):
-        """Вкладка с графиком обучения."""
+        """Вкладка с графиками обучения и зарядки."""
+        # Создание вкладки "Графики"
+        self.figures_frame = ttk.Frame(self.tab_plot)
+        self.figures_frame.pack(fill="both", expand=True)
+
+        # График обучения нейросети
         self.fig_loss = Figure(figsize=(8, 4), dpi=100)
         self.ax_loss = self.fig_loss.add_subplot(111)
-
-        # Добавляем заголовок и подписи осей
         self.ax_loss.set_title('Кривая обучения нейросети', fontsize=16, fontweight='bold')
         self.ax_loss.set_xlabel('Эпохи обучения нейросети', fontsize=12, labelpad=10)
         self.ax_loss.set_ylabel('Ошибки при обучении нейросети', fontsize=12, labelpad=10)
-
-        # Настройка делений оси X для каждого 100 эпох
-        epochs = range(0, 5001, 100)  # Генерация значений по 100 эпох
-        self.ax_loss.set_xticks(epochs)  # Деления через каждые 100 эпох
-        self.ax_loss.set_xlim(0, 5000)  # Устанавливаем диапазон оси X
-        self.ax_loss.set_xticklabels([str(epoch) for epoch in epochs], fontsize=10, rotation=90)  # Угол наклона текста
-
-        # Включаем сетку для удобства анализа
+        epochs = range(0, 5001, 100)
+        self.ax_loss.set_xticks(epochs)
+        self.ax_loss.set_xlim(0, 5000)
+        self.ax_loss.set_xticklabels([str(epoch) for epoch in epochs], fontsize=10, rotation=90)
         self.ax_loss.grid(True, linestyle='--', alpha=0.6)
 
-        # Создаем объект для отображения графика
-        self.canvas_loss = FigureCanvasTkAgg(self.fig_loss, self.tab_plot)
-        self.canvas_loss.get_tk_widget().pack(fill='both', expand=True)
+        self.canvas_loss = FigureCanvasTkAgg(self.fig_loss, self.figures_frame)
+        self.canvas_loss.get_tk_widget().pack(side="top", fill="both", expand=True)
+
+        # График зарядки (инициализация, но он будет заполняться динамически)
+        self.fig_charge = Figure(figsize=(8, 4), dpi=100)
+        self.ax_charge = self.fig_charge.add_subplot(111)
+        self.ax_charge.set_title('График зарядки', fontsize=16, fontweight='bold')
+        self.ax_charge.set_xlabel('Время (сек)', fontsize=12, labelpad=10)
+        self.ax_charge.set_ylabel('Значение', fontsize=12, labelpad=10)
+        self.ax_charge.grid(True, linestyle='--', alpha=0.6)
+
+        self.canvas_charge = FigureCanvasTkAgg(self.fig_charge, self.figures_frame)
+        self.canvas_charge.get_tk_widget().pack(side="top", fill="both", expand=True)
+
+    def plot_charge_graph(self):
+        """Обновление графика зарядки."""
+        if not hasattr(self, 'charge_log') or not self.charge_log["time"]:
+            return
+
+        # Очистка предыдущего графика
+        self.ax_charge.clear()
+
+        # Построение графиков
+        self.ax_charge.plot(self.charge_log["time"], self.charge_log["charge_percent"], label="Процент заряда (%)",
+                            color="blue")
+        self.ax_charge.plot(self.charge_log["time"], self.charge_log["power"], label="Мощность (Вт)", color="green")
+        self.ax_charge.plot(self.charge_log["time"], self.charge_log["remaining_energy"],
+                            label="Оставшаяся энергия (Вт·ч)", color="red")
+
+        # Настройки графика
+        self.ax_charge.set_title("График зарядки", fontsize=16, fontweight="bold")
+        self.ax_charge.set_xlabel("Время (сек)", fontsize=12, labelpad=10)
+        self.ax_charge.set_ylabel("Значение", fontsize=12, labelpad=10)
+        self.ax_charge.legend()
+        self.ax_charge.grid(True, linestyle="--", alpha=0.6)
+
+        # Перерисовка графика
+        self.canvas_charge.draw()
 
     def init_simulation_tab(self):
         """Инициализация вкладки с симуляцией."""
@@ -1128,7 +1162,7 @@ class Simulation:
             for idx, height in enumerate(self.station_heights):
                 if abs(self.drone_height - height) < 1e-2:  # Проверяем совпадение высоты с док-станцией
                     self.update_log(f"Дрон находится на высоте станции {idx + 1}: {height} м. Инициируется зарядка.")
-                    self.charge_at_station(idx)
+                    self.charge_at_station(idx)  # Передаем индекс станции
                     return artists
 
             # Если не удалось идентифицировать станцию, завершаем симуляцию
@@ -1504,71 +1538,83 @@ class Simulation:
             return False
 
     def charge_at_station(self, station_idx: int):
-        """Реалистичная подзарядка дрона на док-станции."""
-        if self.is_charging or getattr(self, 'has_charged', False):  # Зарядка уже выполнена
+        """Реалистичная зарядка дрона на док-станции с учетом фаз CC и CV."""
+        if self.is_charging or getattr(self, 'has_charged', False):  # Если зарядка уже идет или завершена
             return
 
-        # Проверяем, что дрон находится на правильной высоте
+        # Проверка высоты
         if abs(self.drone_height - self.station_heights[station_idx]) >= 1e-2:
             self.update_log(f"Ошибка: Зарядка возможна только на высоте станции {station_idx + 1}.")
             return
 
-        # Проверяем текущий заряд батареи, если он полный, зарядка не требуется
+        # Проверка полного заряда
         if self.remaining_capacity_watt_hours >= self.BATTERY_CAPACITY_WATT_HOURS:
-            self.update_log("Батарея уже полностью заряжена. Зарядка не требуется.")
+            self.update_log("Батарея уже полностью заряжена.")
             return
 
-        self.update_log(
-            f"Зарядка началась на станции {station_idx + 1}. Текущий заряд: {self.charge * 100:.2f}% ({self.remaining_capacity_watt_hours:.2f} Вт·ч)."
-        )
+        # Расчет параметров зарядки
+        max_power = self.CHARGING_VOLTAGE * self.CHARGING_CURRENT  # Максимальная мощность (Вт)
+        efficiency = self.CHARGING_EFFICIENCY  # КПД зарядки
+        energy_needed = self.BATTERY_CAPACITY_WATT_HOURS - self.remaining_capacity_watt_hours  # Требуемая энергия (Вт·ч)
+
+        # Инициализация данных для графика зарядки
+        self.charge_log = {
+            "time": [0],
+            "charge_percent": [self.charge * 100],
+            "power": [0],
+            "remaining_energy": [energy_needed]
+        }
+
+        self.update_log(f"Зарядка началась на станции {station_idx + 1}. Текущий заряд: {self.charge * 100:.2f}% "
+                        f"({self.remaining_capacity_watt_hours:.2f} Вт·ч).")
         self.is_charging = True
-
-        # Шаг 1: Определяем необходимую энергию для зарядки
-        energy_needed = self.BATTERY_CAPACITY_WATT_HOURS - self.remaining_capacity_watt_hours  # Вт·ч
-        charging_power = self.CHARGING_VOLTAGE * self.CHARGING_CURRENT  # Вт
-        charging_efficiency = self.CHARGING_EFFICIENCY
-
-        # Шаг 2: Рассчитываем теоретическое время зарядки в секундах (с учетом КПД)
-        charging_time_seconds = (energy_needed / (charging_power * charging_efficiency)) * 3600
-
-        # Если энергия почти полностью заряжена
-        if energy_needed <= 0.01:
-            self.update_log("Зарядка завершена мгновенно, так как батарея почти полностью заряжена.")
-            self.complete_charge()
-            return
-
-        # Шаг 3: Учитываем множитель скорости симуляции
-        charging_time_simulated = charging_time_seconds / self.simulation_speed_multiplier
         start_time = time.time()
 
         def update_charge():
-            nonlocal charging_time_seconds
+            nonlocal max_power, energy_needed
 
+            # Реальное время с начала зарядки
             elapsed_time_real = time.time() - start_time
-            elapsed_time_sim = elapsed_time_real * self.simulation_speed_multiplier
+            elapsed_time_sim = elapsed_time_real * self.simulation_speed_multiplier  # С учетом ускорения симуляции
+            time_step = elapsed_time_sim - getattr(self, '_last_elapsed_time', 0)  # Временной шаг
+            self._last_elapsed_time = elapsed_time_sim
 
-            # Увеличение заряда
-            charge_increment = (charging_power * charging_efficiency * elapsed_time_sim) / 3600  # Вт·ч
+            # Вычисление мощности
+            if self.charge < 0.9:  # Фаза CC
+                power = max_power
+            else:  # Фаза CV
+                power = max_power * (1 - (self.charge - 0.9) / 0.1)  # Экспоненциальное снижение тока
+
+            # Прирост заряда
+            charge_increment = (power * efficiency * time_step) / 3600  # Вт·ч
             self.remaining_capacity_watt_hours = min(
                 self.BATTERY_CAPACITY_WATT_HOURS, self.remaining_capacity_watt_hours + charge_increment
             )
             self.charge = self.remaining_capacity_watt_hours / self.BATTERY_CAPACITY_WATT_HOURS
 
-            # Обновляем процент заряда и расчет оставшегося времени
-            current_percent = (self.remaining_capacity_watt_hours / self.BATTERY_CAPACITY_WATT_HOURS) * 100
-            charging_time_seconds = max(0, charging_time_seconds - elapsed_time_sim)
+            # Обновление оставшегося времени
+            energy_needed = self.BATTERY_CAPACITY_WATT_HOURS - self.remaining_capacity_watt_hours
+            remaining_time = (energy_needed / (power * efficiency)) * 3600 if power > 0 else 0
 
-            self.update_log(
-                f"Заряд батареи: {current_percent:.2f}% ({self.remaining_capacity_watt_hours:.2f} Вт·ч), "
-                f"Оставшееся время зарядки: {charging_time_seconds:.2f} секунд."
-            )
-            self.update_ui()
+            # Логирование прогресса
+            self.update_log(f"Заряд батареи: {self.charge * 100:.2f}% ({self.remaining_capacity_watt_hours:.2f} Вт·ч). "
+                            f"Оставшееся время: {remaining_time:.2f} сек.")
 
-            # Проверяем завершение зарядки
-            if self.remaining_capacity_watt_hours >= self.BATTERY_CAPACITY_WATT_HOURS or charging_time_seconds <= 0:
+            # Сохранение данных для графика
+            self.charge_log["time"].append(elapsed_time_real)
+            self.charge_log["charge_percent"].append(self.charge * 100)
+            self.charge_log["power"].append(power)
+            self.charge_log["remaining_energy"].append(energy_needed)
+
+            # Проверка завершения зарядки
+            if self.charge >= 0.9999 or remaining_time <= 0:
+                total_time = time.time() - start_time
+                self.update_log(f"Зарядка завершена. Батарея полностью заряжена. Общее время: {total_time:.2f} сек.")
                 self.complete_charge()
+                # Построение графика зарядки
+                self.plot_charge_graph()
             else:
-                self.root.after(1000, update_charge)
+                self.root.after(1000, update_charge)  # Следующий шаг через 1 секунду
 
         update_charge()
 
