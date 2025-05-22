@@ -1547,6 +1547,12 @@ class Simulation:
             self.update_log(f"Ошибка: Зарядка возможна только на высоте станции {station_idx + 1}.")
             return
 
+        # Проверка корректной инициализации начального заряда
+        if not hasattr(self, 'remaining_capacity_watt_hours') or not hasattr(self, 'charge'):
+            self.update_log("Ошибка инициализации переменных заряда. Устанавливаем значения по умолчанию.")
+            self.remaining_capacity_watt_hours = self.BATTERY_CAPACITY_WATT_HOURS * self.charge
+            self.charge = self.remaining_capacity_watt_hours / self.BATTERY_CAPACITY_WATT_HOURS
+
         # Проверка полного заряда
         if self.remaining_capacity_watt_hours >= self.BATTERY_CAPACITY_WATT_HOURS:
             self.update_log("Батарея уже полностью заряжена.")
@@ -1580,10 +1586,11 @@ class Simulation:
             self._last_elapsed_time = elapsed_time_sim
 
             # Вычисление мощности
-            if self.charge < 0.9:  # Фаза CC
+            if self.charge < 0.9:  # Фаза CC (постоянный ток)
                 power = max_power
-            else:  # Фаза CV
-                power = max_power * (1 - (self.charge - 0.9) / 0.1)  # Экспоненциальное снижение тока
+            else:  # Фаза CV (постоянное напряжение)
+                # Экспоненциальное снижение мощности
+                power = max_power * np.exp(-(self.charge - 0.9) / 0.1)
 
             # Прирост заряда
             charge_increment = (power * efficiency * time_step) / 3600  # Вт·ч
@@ -1597,8 +1604,10 @@ class Simulation:
             remaining_time = (energy_needed / (power * efficiency)) * 3600 if power > 0 else 0
 
             # Логирование прогресса
-            self.update_log(f"Заряд батареи: {self.charge * 100:.2f}% ({self.remaining_capacity_watt_hours:.2f} Вт·ч). "
-                            f"Оставшееся время: {remaining_time:.2f} сек.")
+            self.update_log(
+                f"Заряд батареи: {self.charge * 100:.2f}% ({self.remaining_capacity_watt_hours:.2f} Вт·ч). "
+                f"Текущая мощность зарядки: {power:.2f} Вт. Оставшееся время: {remaining_time:.2f} сек."
+            )
 
             # Сохранение данных для графика
             self.charge_log["time"].append(elapsed_time_real)
