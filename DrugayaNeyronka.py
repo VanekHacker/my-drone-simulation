@@ -1563,23 +1563,24 @@ class Simulation:
         start_time = time.time()
 
         def update_charge():
+            """Обновление состояния зарядки."""
             nonlocal max_power, energy_needed
 
             # Реальное время с начала зарядки
             elapsed_time_real = time.time() - start_time
-            elapsed_time_sim = elapsed_time_real * self.simulation_speed_multiplier  # С учетом ускорения симуляции
+            elapsed_time_sim = elapsed_time_real * self.simulation_speed_multiplier  # Ускорение симуляции
 
             # Расчет временного шага
             time_step = elapsed_time_sim - self._last_elapsed_time
             self._last_elapsed_time = elapsed_time_sim
 
-            # Вычисление мощности
+            # Проверка мощности
             if self.charge < 0.9:  # Фаза CC (постоянный ток)
                 power = max_power
             else:  # Фаза CV (постоянное напряжение)
-                power = max_power * (1 - (self.charge - 0.9) / 0.1)  # Уменьшение мощности
+                power = max_power * (1 - (self.charge - 0.9) / 0.1)
 
-            # Защита от деления на ноль
+            # Проверка на корректность мощности
             if power <= 0:
                 self.update_log("Ошибка: мощность зарядки стала равна нулю. Завершаем зарядку.")
                 self.complete_charge()
@@ -1594,35 +1595,19 @@ class Simulation:
             self.remaining_capacity_watt_hours += charge_increment
             self.charge = self.remaining_capacity_watt_hours / self.BATTERY_CAPACITY_WATT_HOURS
 
-            # Обновление интерфейса
-            self.charge_label.config(
-                text=f"Заряд: {self.charge * 100:.2f}% ({self.remaining_capacity_watt_hours:.2f} Вт·ч)"
-            )
-
-            # Обновление оставшегося времени
-            energy_needed = self.BATTERY_CAPACITY_WATT_HOURS - self.remaining_capacity_watt_hours
-            remaining_time = (energy_needed / (power * efficiency)) * 3600 if power > 0 else float('inf')
-
-            # Ограничение времени зарядки
-            remaining_time = min(remaining_time, 3600 * 10)  # Не больше 10 часов
-
-            # Логирование прогресса
+            # Логирование данных
             self.update_log(
                 f"Заряд батареи: {self.charge * 100:.2f}% ({self.remaining_capacity_watt_hours:.2f} Вт·ч). "
-                f"Текущая мощность: {power:.2f} Вт. Оставшееся время: {remaining_time:.2f} сек."
+                f"Текущая мощность: {power:.2f} Вт."
             )
 
             # Проверка завершения зарядки
-            if self.charge >= 0.9999 or remaining_time <= 0:
-                total_time = time.time() - start_time
-                self.update_log(f"Зарядка завершена. Батарея полностью заряжена. Общее время: {total_time:.2f} сек.")
+            if self.charge >= 0.9999:
                 self.complete_charge()
             else:
-                # Планируем следующий вызов с учетом ускорения симуляции
+                # Планируем следующий вызов
                 interval = int(1000 / self.simulation_speed_multiplier)
                 self.root.after(interval, update_charge)
-
-        update_charge()
 
     def charge_timer(self, remaining_time):
         if remaining_time <= 0 or self.charge >= 1.0:
@@ -1648,14 +1633,15 @@ class Simulation:
         self.root.after(100, self.charge_timer, remaining_time - 0.1)
 
     def complete_charge(self):
-        """Завершение зарядки и подъем на рабочую высоту."""
+        """Завершение зарядки, обновление графика и подъем на рабочую высоту."""
         self.charge = 1.0
         self.remaining_capacity_watt_hours = self.BATTERY_CAPACITY_WATT_HOURS
         self.update_log("Зарядка завершена. Батарея дрона полностью заряжена.")
         self.is_charging = False
-
-        # Устанавливаем флаг, чтобы предотвратить повторную зарядку
         self.has_charged = True
+
+        # Обновление графика при завершении зарядки
+        self.plot_charge_graph()
 
         # Расход энергии на подъем на рабочую высоту
         self.target_height = float(self.entries['drone_height'].get())  # Используем значение из параметров
